@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>20/10 • Trái tim sao 3D + 4 ảnh gắn trên tim (fix Oy & duplicate)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Great+Vibes&family=Poppins:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root{ --bg1:#050510; --bg2:#0b0b1c; }
+  html,body{height:100%; margin:0;}
+  body{background: radial-gradient(1200px 800px at 60% 40%, var(--bg2), var(--bg1)); color:#fff; font-family: 'Poppins', ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; overflow:hidden;}
+  #webgl{position:fixed; inset:0; width:100%; height:100%; display:block;}
+
+  /* ====== TITLE ====== */
+  .hud{position:fixed; inset:0; pointer-events:none; display:grid; place-items:center;}
+  #bigTitle{opacity:0; transform:translateY(10px) scale(.98); transition:opacity .9s ease, transform .9s cubic-bezier(.2,.8,.2,1);} 
+  #bigTitle.show{opacity:1; transform:none;}
+  #titleWrap{display:flex; flex-direction:column; align-items:center; gap:.75rem;}
+  .plaque{position:relative; padding:.7rem 1.1rem; border-radius:18px; background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03)); border:1px solid rgba(255,255,255,.12); box-shadow:0 20px 60px rgba(0,0,0,.35); backdrop-filter: blur(6px);}
+  .line-small{font-weight:700; letter-spacing:.12em; text-transform:uppercase; font-size:clamp(11px,2.2vw,13px); text-align:center; opacity:.9}
+  .line-main{font-family:'Great Vibes', cursive; font-size:clamp(42px,6.8vw,72px); line-height:1; text-align:center; background: linear-gradient(120deg, #ffd1d9 0%, #ff6b8a 25%, #ff2f55 50%, #ff7aa2 75%, #ffd1d9 100%); background-size: 220% 220%; -webkit-background-clip:text; background-clip:text; color: transparent; text-shadow: 0 6px 36px rgba(255,64,96,.35), 0 2px 0 rgba(255,255,255,.45); position:relative; letter-spacing:.02em; animation: hueShift 8s ease-in-out infinite;}
+  .line-main::after{content:""; position:absolute; inset:0; background: linear-gradient(75deg, transparent 45%, rgba(255,255,255,.85) 50%, transparent 55%); transform: translateX(-120%); filter: blur(1px); mix-blend-mode: screen; animation: shimmer 2.8s ease-in-out 1.2s both;}
+  @keyframes shimmer{to{transform: translateX(120%);} } @keyframes hueShift{0%{filter:hue-rotate(0deg)}50%{filter:hue-rotate(-10deg)}100%{filter:hue-rotate(0deg)}}
+
+  .note{opacity:.8; font-size:clamp(12px,2.6vw,14px); text-align:center}
+</style>
+</head>
+<body>
+  <canvas id="webgl"></canvas>
+  <div class="hud">
+    <div id="bigTitle">
+      <div id="titleWrap">
+        <div class="plaque">
+          <div class="line-small">Chúc em hạnh phúc bên toiii</div>
+          <div class="line-main">Anh yêu em</div>
+        </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+<script>
+(function(){
+  // ====== STATE & FLAGS ======
+  let phase = 'idle'; // idle → explode → assemble → formed
+  let titleShown = false; // show after formed only
+  const HEART_SCALE = 2.8; // big & clear
+
+  // ====== RENDERER / SCENE / CAMERA ======
+  const DPR = Math.max(1, Math.min(2.5, devicePixelRatio || 1));
+  const canvas = document.getElementById('webgl');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias:true, alpha:true });
+  renderer.setPixelRatio(DPR); renderer.setSize(innerWidth, innerHeight);
+  const scene = new THREE.Scene();
+  const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 300);
+  camera.position.set(0, 1.2, 10.0);
+  addEventListener('resize', ()=>{ camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); }, {passive:true});
+
+  // ====== MANUAL DRAG ORBIT ======
+  const contentGroup = new THREE.Group(); scene.add(contentGroup);
+  let isDragging=false, lastX=0, lastY=0, yaw=0, pitch=0, autoRotate=0.22; // rad/s
+  function posFromEvent(e){ return {x: (e.touches? e.touches[0].clientX : e.clientX), y: (e.touches? e.touches[0].clientY : e.clientY)} }
+  function onDown(e){ isDragging=true; const p=posFromEvent(e); lastX=p.x; lastY=p.y; document.body.style.cursor='grabbing'; }
+  function onUp(){ isDragging=false; document.body.style.cursor='default'; }
+  function onMove(e){ if(!isDragging) return; const p=posFromEvent(e); const dx=p.x-lastX, dy=p.y-lastY; lastX=p.x; lastY=p.y; yaw += dx*0.005; pitch += dy*0.003; pitch=Math.max(-1.0,Math.min(1.0,pitch)); }
+  canvas.addEventListener('mousedown', onDown); addEventListener('mouseup', onUp); addEventListener('mousemove', onMove);
+  canvas.addEventListener('touchstart', onDown, {passive:true}); addEventListener('touchend', onUp, {passive:true}); canvas.addEventListener('touchmove', onMove, {passive:true});
+
+  // ====== LIGHTING & BACKDROP ======
+  scene.add(new THREE.AmbientLight(0x8899ff, 0.35)); const keyLight = new THREE.DirectionalLight(0xffffff, 0.9); keyLight.position.set(5, 6, 8); scene.add(keyLight);
+  const starGroup = new THREE.Group(); scene.add(starGroup);
+  const STAR_COUNT_BG = 1200; const starGeoBG = new THREE.BufferGeometry(); const starPosBG = new Float32Array(STAR_COUNT_BG*3);
+  for(let i=0;i<STAR_COUNT_BG;i++){ const r = 80 * Math.cbrt(Math.random()); const th = Math.random()*Math.PI*2; const ph = Math.acos(2*Math.random()-1); starPosBG[i*3+0] = r*Math.sin(ph)*Math.cos(th); starPosBG[i*3+1] = r*(Math.sin(ph)*Math.sin(th))*0.7; starPosBG[i*3+2] = r*Math.cos(ph); }
+  starGeoBG.setAttribute('position', new THREE.BufferAttribute(starPosBG, 3));
+  const starMatBG = new THREE.PointsMaterial({ color:0xffffff, size:0.05, sizeAttenuation:true, depthWrite:false, transparent:true, opacity:0.8 });
+  starGroup.add(new THREE.Points(starGeoBG, starMatBG));
+
+  // ====== SPECIAL STAR (click target) ======
+  const specialStar = new THREE.Mesh(new THREE.IcosahedronGeometry(0.3, 1), new THREE.MeshStandardMaterial({ color:0xffffaa, emissive:0xfff1a6, emissiveIntensity:1.2, metalness:0.1, roughness:0.3 }));
+  specialStar.position.set( (Math.random()*2-1)*2.8, 0.9 + Math.random()*1.2, (Math.random()*2-1)*1.2 ); contentGroup.add(specialStar);
+  const starPulse = { t: 0 }; const halo = new THREE.Sprite(new THREE.SpriteMaterial({ color:0xffeeaa, opacity:0.8 })); halo.scale.set(1.1,1.1,1.1); specialStar.add(halo);
+
+  // pointer hover for special star
+  const raycaster = new THREE.Raycaster(); const pointer = new THREE.Vector2();
+  function onPointerMove(e){ const rect = renderer.domElement.getBoundingClientRect(); const cx = (e.clientX!==undefined)? e.clientX : (e.touches? e.touches[0].clientX : 0); const cy = (e.clientY!==undefined)? e.clientY : (e.touches? e.touches[0].clientY : 0); pointer.x = ((cx - rect.left) / rect.width) * 2 - 1; pointer.y = -((cy - rect.top) / rect.height) * 2 + 1; raycaster.setFromCamera(pointer, camera); const hit = raycaster.intersectObject(specialStar, true); if(phase==='idle') document.body.style.cursor = hit.length? 'pointer' : (isDragging?'grabbing':'default'); }
+  addEventListener('mousemove', onPointerMove, {passive:true}); addEventListener('touchmove', onPointerMove, {passive:true});
+
+  // ====== STAR SPRITE TEXTURE (glossy) ======
+  function makeStarTexture(size=192, spikes=5, inner=.40, outer=1.0, body='#ff2f55'){
+    const c = document.createElement('canvas'); c.width=c.height=size; const ctx = c.getContext('2d'); ctx.clearRect(0,0,size,size);
+    ctx.save(); ctx.translate(size/2, size/2); ctx.rotate(-Math.PI/2);
+    // glow
+    ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.shadowColor = 'rgba(255,80,100,0.9)'; ctx.shadowBlur = size*0.18; ctx.beginPath(); starPath(ctx, spikes, outer*size*0.5, inner*size*0.5); ctx.fill();
+    // body gradient
+    const g = ctx.createRadialGradient(-size*0.12,-size*0.12, size*0.03, 0,0, size*0.5);
+    g.addColorStop(0, '#ffffff'); g.addColorStop(0.25, body); g.addColorStop(1, 'rgba(255,255,255,0.0)');
+    ctx.fillStyle = g; ctx.shadowBlur = 0; ctx.globalCompositeOperation = 'lighter';
+    ctx.beginPath(); starPath(ctx, spikes, outer*size*0.5, inner*size*0.5); ctx.fill();
+    ctx.restore();
+    const tex = new THREE.CanvasTexture(c); tex.anisotropy = 8; tex.generateMipmaps = true; tex.needsUpdate = true; return tex;
+  }
+  function starPath(ctx, spikes, outerR, innerR){ let rot = 0, x = 0, y = 0; ctx.moveTo(outerR, 0); for(let i=0;i<spikes;i++){ x = Math.cos(rot + Math.PI/spikes) * innerR; y = Math.sin(rot + Math.PI/spikes) * innerR; ctx.lineTo(x,y); rot += (Math.PI*2)/spikes; x = Math.cos(rot) * outerR; y = Math.sin(rot) * outerR; ctx.lineTo(x,y);} ctx.closePath(); }
+  const starTex = makeStarTexture(192);
+
+  // ====== HEART IMPLICIT SURFACE (the function you provided) ======
+  function fHeart(x,y,z){ const a = -x*x - (9/4)*y*y - z*z + 1; return -a*a*a + x*x*z*z*z + (9/80)*y*y*z*z*z; }
+
+  // uniform directions via Fibonacci sphere
+  function fiboDirections(n){
+    const dirs = new Float32Array(n*3); const PHI = (1 + Math.sqrt(5)) / 2;
+    for(let i=0;i<n;i++){ const t = i / n; const lat = Math.asin(2*t - 1); const lon = 2*Math.PI*i/PHI; const x = Math.cos(lat)*Math.cos(lon), y = Math.sin(lat), z = Math.cos(lat)*Math.sin(lon); dirs[i*3+0]=x; dirs[i*3+1]=y; dirs[i*3+2]=z; }
+    return dirs;
+  }
+
+  // binary search along ray to hit f=0 (guaranteed bracket: r∈[0,RMAX])
+  function rayHitOnSurface(dx,dy,dz){ const RMAX = 3.0, ITER = 24; let lo = 0.0, hi = RMAX; for(let k=0;k<ITER;k++){ const mid = 0.5*(lo+hi); const x=dx*mid, y=dy*mid, z=dz*mid; const v = fHeart(x,y,z); if(v>0) hi = mid; else lo = mid; } const r = 0.5*(lo+hi); return [dx*r*HEART_SCALE, dy*r*HEART_SCALE, dz*r*HEART_SCALE]; }
+
+  // ====== TARGETS (5000 stars on heart) ======
+  const STAR_COUNT = 5000;
+  const starGeo = new THREE.BufferGeometry();
+  const positions = new Float32Array(STAR_COUNT*3);
+  const velocities = new Float32Array(STAR_COUNT*3);
+  const targets = new Float32Array(STAR_COUNT*3);
+  const colors = new Float32Array(STAR_COUNT*3);
+  const starMat = new THREE.PointsMaterial({ map: starTex, vertexColors:true, size:0.13, sizeAttenuation:true, transparent:true, alphaTest:0.1, depthWrite:true, blending:THREE.AdditiveBlending });
+  const heartStars = new THREE.Points(starGeo, starMat); heartStars.visible = false; contentGroup.add(heartStars);
+
+  (function sampleTargets(){
+    const dirs = fiboDirections(STAR_COUNT);
+    const qStand = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI/2, 0, 0)); // dựng đứng tim
+    const v = new THREE.Vector3();
+    for(let i=0;i<STAR_COUNT;i++){
+      const dx=dirs[i*3+0], dy=dirs[i*3+1], dz=dirs[i*3+2];
+      const p = rayHitOnSurface(dx,dy,dz);
+      v.set(p[0],p[1],p[2]).applyQuaternion(qStand); // rotate upright
+      targets[i*3+0]=v.x; targets[i*3+1]=v.y; targets[i*3+2]=v.z;
+    }
+    // color: red body + bright highlights towards a fake light dir
+    const L = new THREE.Vector3(-0.35, 0.55, 0.45).normalize();
+    for(let i=0;i<STAR_COUNT;i++){
+      const x=targets[i*3+0], y=targets[i*3+1], z=targets[i*3+2];
+      const n = new THREE.Vector3(x,y,z).normalize();
+      const h = Math.max(0, n.dot(L));
+      const r = 0.72 + 0.28*h, g = 0.16 + 0.14*h, b = 0.22 + 0.16*h;
+      colors[i*3+0]=r; colors[i*3+1]=g; colors[i*3+2]=b;
+    }
+  })();
+
+  // ====== UNDER-HEART RING (define BEFORE onFormed to avoid TDZ) ======
+  const ringGroup = new THREE.Group(); ringGroup.visible = false; contentGroup.add(ringGroup);
+  const ringTex = makeStarTexture(144,5,.40,1.0,'#ffffff');
+  const ringMat = new THREE.PointsMaterial({ map:ringTex, size:0.11, sizeAttenuation:true, transparent:true, alphaTest:0.1, depthWrite:false, blending:THREE.AdditiveBlending, color:0xffffff});
+  const RING_COUNT = 72; const ringGeo = new THREE.BufferGeometry(); const ringPos = new Float32Array(RING_COUNT*3);
+  const R = HEART_SCALE*2.0, YR = -HEART_SCALE*0.62; for(let i=0;i<RING_COUNT;i++){ const a=i/RING_COUNT*Math.PI*2; ringPos[i*3+0]=Math.cos(a)*R; ringPos[i*3+1]=YR; ringPos[i*3+2]=Math.sin(a)*R*0.85; }
+  ringGeo.setAttribute('position', new THREE.BufferAttribute(ringPos,3)); ringGroup.add(new THREE.Points(ringGeo, ringMat));
+
+  // ====== 4 PHOTO PLANES (anchored around Oy) ======
+  const PHOTO_URLS = [
+    "https://www.facebook.com/photo?fbid=1288672015803973&set=a.111587440179109",
+    "https://scontent.fhan4-5.fna.fbcdn.net/v/t39.30808-6/481014023_1332283881442786_6076090423834763230_n.jpg?_nc_cat=103&ccb=1-7&_nc_sid=6ee11a&_nc_ohc=pOOZNiT5AGgQ7kNvwFdVE__&_nc_oc=Admv937ldWNBuaHsJT5umbomDOY-4yIAgiMf2I2DciuIfIJw1WzMr6fGN3Rl3TBCeyk&_nc_zt=23&_nc_ht=scontent.fhan4-5.fna&_nc_gid=o1dGxLQfpbwWkpTokWFi2w&oh=00_AfdKlKUTWOgWo7_bn5wd4PCw-VNPcno1IKxjgVCTGS3YgQ&oe=68FBF7DB",
+    "https://scontent.fhan4-5.fna.fbcdn.net/v/t39.30808-6/481014023_1332283881442786_6076090423834763230_n.jpg?_nc_cat=103&ccb=1-7&_nc_sid=6ee11a&_nc_ohc=pOOZNiT5AGgQ7kNvwFdVE__&_nc_oc=Admv937ldWNBuaHsJT5umbomDOY-4yIAgiMf2I2DciuIfIJw1WzMr6fGN3Rl3TBCeyk&_nc_zt=23&_nc_ht=scontent.fhan4-5.fna&_nc_gid=o1dGxLQfpbwWkpTokWFi2w&oh=00_AfdKlKUTWOgWo7_bn5wd4PCw-VNPcno1IKxjgVCTGS3YgQ&oe=68FBF7DB",
+    "https://scontent.fhan4-5.fna.fbcdn.net/v/t39.30808-6/481014023_1332283881442786_6076090423834763230_n.jpg?_nc_cat=103&ccb=1-7&_nc_sid=6ee11a&_nc_ohc=pOOZNiT5AGgQ7kNvwFdVE__&_nc_oc=Admv937ldWNBuaHsJT5umbomDOY-4yIAgiMf2I2DciuIfIJw1WzMr6fGN3Rl3TBCeyk&_nc_zt=23&_nc_ht=scontent.fhan4-5.fna&_nc_gid=o1dGxLQfpbwWkpTokWFi2w&oh=00_AfdKlKUTWOgWo7_bn5wd4PCw-VNPcno1IKxjgVCTGS3YgQ&oe=68FBF7DB"
+  ];
+  const photoGroup = new THREE.Group(); photoGroup.visible = false; contentGroup.add(photoGroup); // ✅ declare ONCE
+  const loader = new THREE.TextureLoader();
+  const anchorPositions = []; // for tests/verification
+  const PHOTO_SIZE = HEART_SCALE * 0.8; // nhỏ hơn tim, dễ thấy hình trái tim
+  const OFFSET = HEART_SCALE * 0.14;      // đẩy ra ngoài mặt một chút
+
+  function createPhotoPlane(tex, posVec){
+    const geo = new THREE.PlaneGeometry(1,1);
+    const mat = new THREE.MeshBasicMaterial({ map: tex, transparent:true, side: THREE.DoubleSide });
+    const mesh = new THREE.Mesh(geo, mat);
+    // scale theo tỉ lệ ảnh
+    const w = (tex.image && tex.image.width) || 1, h = (tex.image && tex.image.height) || 1; const ar = w/h; mesh.scale.set(PHOTO_SIZE*ar, PHOTO_SIZE, 1);
+    // đặt vị trí và hướng mặt ra ngoài
+    const n = posVec.clone().normalize();
+    mesh.position.copy(posVec.clone().add(n.clone().multiplyScalar(OFFSET)));
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0,0,1), n);
+    mesh.setRotationFromQuaternion(q);
+    mesh.renderOrder = 3; // trên lớp sao ở cùng hướng nhìn
+    return mesh;
+  }
+
+  function placeFourPhotos(){
+    const qStand = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI/2, 0, 0)); // cùng hướng với targets (dựng đứng)
+    for(let k=0;k<4;k++){
+      const ang = k * Math.PI/2; // 0,90,180,270° quanh Oy (sau dựng đứng)
+      // Chọn hướng TRƯỚC khi dựng đứng trong mặt phẳng XY (dz=0),
+      // SAU khi xoay +X(π/2) → ảnh nằm trên xz-plane (y'=0) ⇒ vòng quanh Oy.
+      const dx = Math.cos(ang), dy = Math.sin(ang), dz = 0;
+      const p = rayHitOnSurface(dx,dy,dz); // điểm trên bề mặt tim (trước dựng đứng)
+      const pos = new THREE.Vector3(p[0],p[1],p[2]).applyQuaternion(qStand); // dựng đứng như targets
+      anchorPositions.push(pos.clone());
+      loader.load(
+        PHOTO_FILES[k],
+        (tex)=>{ photoGroup.add(createPhotoPlane(tex, pos)); },
+        undefined,
+        ()=>{ /* nếu thiếu ảnh, bỏ qua tấm đó */ }
+      );
+    }
+  }
+
+  // ====== CLICK TO TRIGGER ======
+  addEventListener('click', (e)=>{ if(phase!=='idle') return; const rect = renderer.domElement.getBoundingClientRect(); const cx = (e.clientX!==undefined)? e.clientX : 0; const cy = (e.clientY!==undefined)? e.clientY : 0; pointer.x = ((cx - rect.left) / rect.width) * 2 - 1; pointer.y = -((cy - rect.top) / rect.height) * 2 + 1; raycaster.setFromCamera(pointer, camera); const hit = raycaster.intersectObject(specialStar, true); if(hit.length===0) return; triggerExplosion(); });
+
+  // ====== EXPLOSION & ASSEMBLY ======
+  let explodeStart = 0, assembleStart=0; const SPRING=0.55, DAMP=0.82;
+  function triggerExplosion(){
+    phase = 'explode'; explodeStart = performance.now(); heartStars.visible = true;
+    const origin = specialStar.getWorldPosition(new THREE.Vector3());
+    for(let i=0;i<STAR_COUNT;i++){
+      positions[i*3+0]=origin.x; positions[i*3+1]=origin.y; positions[i*3+2]=origin.z;
+      const dir = new THREE.Vector3(Math.random()*2-1, Math.random()*2-1, Math.random()*2-1).normalize();
+      const speed = 1.15 + Math.random()*2.6; velocities[i*3+0]=dir.x*speed; velocities[i*3+1]=dir.y*speed; velocities[i*3+2]=dir.z*speed;
+    }
+    starGeo.setAttribute('position', new THREE.BufferAttribute(positions,3));
+    starGeo.setAttribute('color', new THREE.BufferAttribute(colors,3));
+    starGeo.computeBoundingSphere(); specialStar.visible=false;
+    setTimeout(()=>{ phase='assemble'; assembleStart = performance.now(); }, 700);
+  }
+
+  function onFormed(){
+    if(phase!=='formed') return;
+    if(!titleShown){ document.getElementById('bigTitle').classList.add('show'); titleShown = true; launchTitleFX(); }
+    ringGroup.visible = true; 
+    photoGroup.visible = true; 
+    placeFourPhotos();
+  }
+
+  function launchTitleFX(){ const el = document.querySelector('#bigTitle .plaque'); if(!el) return; const r = el.getBoundingClientRect(); const layer = document.createElement('div'); layer.className='sparks'; document.body.appendChild(layer); const N = 28; for(let i=0;i<N;i++){ const s=document.createElement('i'); s.className='spark'; const x=r.left+r.width*0.5+(Math.random()-0.5)*r.width*1.1; const y=r.top+r.height*0.5+(Math.random()-0.5)*r.height*1.2; s.style.left=x+'px'; s.style.top=y+'px'; s.style.setProperty('--dx',((Math.random()-0.5)*60)+'px'); s.style.setProperty('--dy',((Math.random()-0.5)*40-30)+'px'); s.style.animationDelay=(Math.random()*0.3)+'s'; layer.appendChild(s);} setTimeout(()=> layer.remove(), 2600); }
+
+  // ====== RENDER LOOP ======
+  let lastTime = performance.now();
+  function animate(){
+    requestAnimationFrame(animate);
+    const now=performance.now(); const dt=Math.min(0.033,(now-lastTime)/1000); lastTime=now;
+    starGroup.rotation.y += 0.0007; if(!isDragging) yaw += autoRotate*dt*0.8; contentGroup.rotation.set(pitch, yaw, 0); if(ringGroup.visible) ringGroup.rotation.y += 0.35*dt; if(phase==='idle' && specialStar.visible){ starPulse.t += 0.08; const s=1+Math.sin(starPulse.t)*0.18; specialStar.scale.setScalar(s); halo.material.opacity=0.6+Math.abs(Math.sin(starPulse.t))*0.35; }
+
+    if(phase==='explode' || phase==='assemble' || phase==='formed'){
+      heartStars.visible = true;
+      for(let i=0;i<STAR_COUNT;i++){
+        const i3=i*3;
+        if(phase==='explode'){
+          velocities[i3+0]*=0.985; velocities[i3+1]*=0.985; velocities[i3+2]*=0.985;
+          positions[i3+0] += velocities[i3+0]*dt*2.2; positions[i3+1] += velocities[i3+1]*dt*2.2; positions[i3+2] += velocities[i3+2]*dt*2.2;
+        } else {
+          const dx = targets[i3+0] - positions[i3+0];
+          const dy = targets[i3+1] - positions[i3+1];
+          const dz = targets[i3+2] - positions[i3+2];
+          velocities[i3+0] = velocities[i3+0]*0.82 + dx*0.58;
+          velocities[i3+1] = velocities[i3+1]*0.82 + dy*0.58;
+          velocities[i3+2] = velocities[i3+2]*0.82 + dz*0.58;
+          positions[i3+0] += velocities[i3+0]*dt*0.13; 
+          positions[i3+1] += velocities[i3+1]*dt*0.13; 
+          positions[i3+2] += velocities[i3+2]*dt*0.13; 
+        }
+      }
+      starGeo.attributes.position.needsUpdate = true;
+      if(phase==='explode' && (now-explodeStart)>700){ phase='assemble'; assembleStart=now; }
+      if(phase==='assemble' && (now-assembleStart)>2000){ phase='formed'; onFormed(); }
+    }
+
+    // Fade photos by facing to camera (front bright, back dim) — helps see the heart behind
+    if(photoGroup.visible){
+      const originW = new THREE.Vector3(); contentGroup.getWorldPosition(originW);
+      const toCam = new THREE.Vector3(); const wp = new THREE.Vector3(); const n = new THREE.Vector3();
+      for(const m of photoGroup.children){
+        m.getWorldPosition(wp); toCam.copy(camera.position).sub(wp).normalize(); n.copy(wp).sub(originW).normalize();
+        const facing = Math.max(0, n.dot(toCam));
+        m.material.opacity = 0.15 + 0.85*Math.pow(facing, 1.4);
+      }
+    }
+
+    renderer.render(scene, camera);
+  }
+  animate();
+
+  // ====== SELF-TESTS ======
+  (function runSelfTests(){ try{
+    console.log('%c[TEST] Start', 'color:#9fe');
+    console.assert(!document.getElementById('bigTitle').classList.contains('show'), 'Title hidden before formed');
+    console.assert(phase==='idle', 'Phase starts at idle');
+    console.assert(STAR_COUNT===5000, 'Star count == 5000');
+    console.assert(fHeart(0,0,0) < 0, 'fHeart(0,0,0) negative for bracketing');
+    // bounds sanity after sampling
+    let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity; for(let i=0;i<STAR_COUNT;i++){ const x=targets[i*3+0],y=targets[i*3+1]; if(x<minX)minX=x; if(x>maxX)maxX=x; if(y<minY)minY=y; if(y>maxY)maxY=y; }
+    console.assert((maxX-minX)>5.0 && (maxY-minY)>4.4, 'Heart size visible');
+    // anchors around Oy roughly orthogonal
+    (function testAnchors(){ const qStand = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI/2,0,0)); const dirs=[]; for(let k=0;k<4;k++){ const ang=k*Math.PI/2; const dx=Math.cos(ang), dz=Math.sin(ang), dy=0; const p=rayHitOnSurface(dx,dy,dz); const v=new THREE.Vector3(p[0],p[1],p[2]).applyQuaternion(qStand).normalize(); dirs.push(v); } const dot01=Math.abs(dirs[0].dot(dirs[1])); const dot12=Math.abs(dirs[1].dot(dirs[2])); console.assert(dot01<0.2 && dot12<0.2, 'Anchors ~90° apart around Oy'); })();
+    // extra async tests
+    setTimeout(()=>{
+      if(anchorPositions.length===4){
+        const okEq = anchorPositions.every(p=> Math.abs(p.y) < HEART_SCALE*0.12);
+        console.assert(okEq, 'Anchors lie near equator (y≈0) after stand-up');
+      }
+      if(photoGroup){ console.assert(photoGroup.children.length <= 4, 'At most 4 photo planes added'); }
+    }, 4000);
+    console.log('%c[TEST] Passed', 'color:#9f9');
+  }catch(err){ console.error('[TEST] Failed', err); } })();
+
+})();
+</script>
+</body>
+</html>
